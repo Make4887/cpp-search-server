@@ -3,7 +3,6 @@
 #include <iostream>
 #include <map>
 #include <numeric>
-#include <optional>
 #include <set>
 #include <string>
 #include <utility>
@@ -73,15 +72,6 @@ class SearchServer {
 public:
     inline static constexpr int INVALID_DOCUMENT_ID = -1;
 
-    explicit SearchServer(const string& stop_words) {
-        for (const string& word : SplitIntoWords(stop_words)) {
-            if (!IsValidWord(word)) {
-                throw invalid_argument("Incorrect stop word"s);
-            }
-            stop_words_.insert(word);
-        }
-    }
-
     template<typename Container>
     explicit SearchServer(const Container& stop_words) {
         for (const string& word : stop_words) {
@@ -90,6 +80,11 @@ public:
             }
             stop_words_.insert(word);
         }
+    }
+
+    explicit SearchServer(const string& stop_words)
+        : SearchServer(SplitIntoWords(stop_words))
+    {
     }
 
     void AddDocument(int document_id, const string& document, DocumentStatus status, const vector<int>& ratings) {
@@ -105,6 +100,7 @@ public:
             word_to_document_freqs_[word][document_id] += inv_word_count;
         }
         documents_.emplace(document_id, DocumentData{ ComputeAverageRating(ratings), status });
+        order_added_documents_.push_back(document_id);
     }
 
     template<typename DocumentPredicate>
@@ -160,16 +156,7 @@ public:
     }
 
     int GetDocumentId(int index) const {
-        if (0 <= index || index < static_cast<int>(documents_.size())) {
-            int i = 0;
-            for (const auto& [id, document] : documents_) {
-                if (i == index) {
-                    return id;
-                }
-                ++i;
-            }
-        }
-        throw out_of_range("The sent document index is out of range");
+        return order_added_documents_.at(index);
     }
 
 private:
@@ -181,6 +168,7 @@ private:
     set<string> stop_words_;
     map<string, map<int, double>> word_to_document_freqs_;
     map<int, DocumentData> documents_;
+    vector<int> order_added_documents_;
 
     bool IsStopWord(const string& word) const {
         return stop_words_.count(word) > 0;
@@ -213,14 +201,31 @@ private:
         bool is_stop;
     };
 
-    QueryWord ParseQueryWord(string text) const {
+    QueryWord ParseQueryWord(string word) const {
+        if (!IsValidWord(word)) {
+            throw invalid_argument("Query contains an incorrect word"s);
+        }
+
+        if (word.back() == '-') {
+            throw invalid_argument("The query word ends with \"-\""s);
+        }
+
         bool is_minus = false;
         // Word shouldn't be empty
-        if (text[0] == '-') {
+        if (word[0] == '-') {
             is_minus = true;
-            text = text.substr(1);
+            word = word.substr(1);
+
+            if (word.empty()) {
+                throw invalid_argument("The query word consists only of \"-\""s);
+            }
+
+            if (word[0] == '-') {
+                throw invalid_argument("The query word contains more than one \"-\" at the beginning"s);
+            }
         }
-        return { text, is_minus, IsStopWord(text) };
+
+        return { word, is_minus, IsStopWord(word) };
     }
 
     static bool IsValidWord(const string& word) {
@@ -237,22 +242,9 @@ private:
     Query ParseQuery(const string& text) const {
         Query result;
         for (const string& word : SplitIntoWords(text)) {
-            if (!IsValidWord(word)) {
-                throw invalid_argument("Query contains an incorrect word"s);
-            }
-            if (text.back() == '-') {
-                throw invalid_argument("The query word ends with \"-\""s);
-            }
             const QueryWord query_word = ParseQueryWord(word);
-
             if (!query_word.is_stop) {
                 if (query_word.is_minus) {
-                    if (query_word.data.empty()) {
-                        throw invalid_argument("The query word consists only of \"-\""s);
-                    }
-                    if (query_word.data[0] == '-') {
-                        throw invalid_argument("The query word contains more than one \"-\" at the beginning"s);
-                    }
                     result.minus_words.insert(query_word.data);
                 }
                 else {
@@ -269,7 +261,6 @@ private:
     }
 
     template<typename FindStatus>
-
     vector<Document> FindAllDocuments(const Query& query, FindStatus find_status) const {
         map<int, double> document_to_relevance;
         for (const string& word : query.plus_words) {
@@ -357,4 +348,7 @@ int main() {
     catch (const out_of_range& e) {
         cout << "Invalid argument: "s << e.what() << endl;
     }
+    search_server.AddDocument(3, "пёс с пушистым хвостом"s, DocumentStatus::ACTUAL, { 7, 2, 7 });
+    search_server.AddDocument(2, "черный кот пушистый хвост"s, DocumentStatus::ACTUAL, { 7, 2, 7 });
+    cout << "Second document has "s << search_server.GetDocumentId(2) << " id"s << endl;
 }
